@@ -1,0 +1,25 @@
+.venv_ml1m/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.swp
+.DS_Store
+.ipynb_checkpoints/
+# Ignorar archivos comprimidos y de datos grandes
+*.zip
+*.tar.gz
+*.tar
+*.rar
+*.7z
+# Ignorar salidas temporales de Jupyter
+*.nbconvert.ipynb
+# Ignorar carpetas de salida
+output/
+outputs/
+# Ignorar archivos de configuración de VSCode
+.vscode/
+# Ignorar archivos de logs
+*.log
+.venv_ml1m/
