@@ -35,7 +35,6 @@ class User(BaseModel):
     buy_history: Optional[str] = None
 
 class Rating(BaseModel):
-    user_id: int
     game_id: int
     rating: float
 
