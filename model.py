@@ -16,6 +16,7 @@ def train_surprise_model():
     # Entrenar modelo SVD con todos los datos
     trainset = data.build_full_trainset()
     model = SVD()
+    print("Training Surprise SVD model..." +  str(data.df.shape))
     model.fit(trainset)
 
     return model
