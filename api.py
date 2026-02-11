@@ -71,6 +71,9 @@ def update_user(id: int, user: User, db: Session = Depends(get_db)):
     return {"msg": "User updated"}
 
 
+# Constante para el threshold de cold start (basado en ratings)
+COLD_START_THRESHOLD = 7  # Mínimo de ratings para usar filtrado colaborativo
+
 # Endpoint para obtener recomendaciones
 @app.get("/users/{id}/recommend")
 def recommend(id: int, db: Session = Depends(get_db)):
@@ -79,34 +82,43 @@ def recommend(id: int, db: Session = Depends(get_db)):
     if not db_user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    # Verificar si el usuario tiene historial de compras
-    buy_history_ids = set()
-    has_buy_history = False
+    # Contar cuántos ratings ha hecho el usuario
+    num_ratings = db.query(RatingDB).filter(RatingDB.user_id == id).count()
     
+    # Verificar historial de compras para excluir juegos ya comprados
+    buy_history_ids = set()
     if db_user.buy_history and db_user.buy_history.strip():
         buy_history_ids = set(map(int, db_user.buy_history.split(',')))
-        has_buy_history = True
     
-    # Si el usuario NO tiene historial, recomendar por mejor rating promedio
-    if not has_buy_history:
-        games = db.query(GameDB).order_by(
+    # COLD START: Si tiene menos ratings que el threshold
+    if num_ratings < COLD_START_THRESHOLD:
+        # Excluir juegos comprados si tiene historial
+        query = db.query(GameDB)
+        if buy_history_ids:
+            query = query.filter(~GameDB.game_id.in_(buy_history_ids))
+        
+        games = query.order_by(
             GameDB.rating_avg.desc().nullslast()
         ).limit(10).all()
+        
         return {
             "recommendations": [
                 {
                     "game_id": g.game_id, 
                     "name": g.name, 
-                    "rating_avg": g.rating_avg
+                    "rating_avg": g.rating_avg,
+                    "method": "cold_start",
+                    "user_ratings_count": num_ratings
                 } 
                 for g in games
             ]
         }
     
+    # Usuario con suficiente historial de ratings (>= COLD_START_THRESHOLD)
     # Obtener juegos no comprados por el usuario
     unbought_games = db.query(GameDB).filter(
         ~GameDB.game_id.in_(buy_history_ids)
-    ).all()
+    ).all() if buy_history_ids else db.query(GameDB).all()
     
     # Si hay modelo entrenado, predecir ratings para juegos no comprados
     if svd_model is not None:
@@ -121,16 +133,20 @@ def recommend(id: int, db: Session = Depends(get_db)):
                 {
                     "game_id": g.game_id, 
                     "name": g.name, 
-                    "pred_rating": est
+                    "pred_rating": est,
+                    "method": "collaborative_filtering",
+                    "user_ratings_count": num_ratings
                 }
                 for g, est in recommendations
             ]
         }
     
     # Fallback: si no hay modelo, usar rating promedio (excluyendo comprados)
-    games = db.query(GameDB).filter(
-        ~GameDB.game_id.in_(buy_history_ids)
-    ).order_by(
+    query = db.query(GameDB)
+    if buy_history_ids:
+        query = query.filter(~GameDB.game_id.in_(buy_history_ids))
+    
+    games = query.order_by(
         GameDB.rating_avg.desc().nullslast()
     ).limit(10).all()
     
@@ -139,7 +155,9 @@ def recommend(id: int, db: Session = Depends(get_db)):
             {
                 "game_id": g.game_id, 
                 "name": g.name,
-                "rating_avg": g.rating_avg
+                "rating_avg": g.rating_avg,
+                "method": "popularity_fallback",
+                "user_ratings_count": num_ratings
             } 
             for g in games
         ]
