@@ -122,10 +122,19 @@ def rate_game(id: int, rating: Rating, db: Session = Depends(get_db)):
     # Agregar el rating a la base de datos
     db_rating = RatingDB(user_id=id, game_id=rating.game_id, rating=rating.rating)
     db.add(db_rating)
+    # Actualizar promedio y cantidad de ratings del juego
+    if db_game.no_of_ratings is None:
+        db_game.no_of_ratings = 0
+    if db_game.rating_avg is None:
+        db_game.rating_avg = 0.0
+    nuevo_total = db_game.no_of_ratings + 1
+    nuevo_promedio = (db_game.rating_avg * db_game.no_of_ratings + rating.rating) / nuevo_total
+    db_game.no_of_ratings = nuevo_total
+    db_game.rating_avg = nuevo_promedio
     db.commit()
     # Re-entrenar y guardar el modelo
     train_and_save_model()
-    return {"msg": "Rating added and model updated"}
+    return {"msg": "Rating added, game average updated, and model updated"}
 
 
 
