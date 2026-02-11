@@ -79,22 +79,18 @@ def recommend(id: int, db: Session = Depends(get_db)):
     db_user = db.query(UserDB).filter(UserDB.user_id == id).first()
     if not db_user:
         raise HTTPException(status_code=404, detail="User not found")
-    # Obtener ratings calificados por el usuario
-    user_ratings = db.query(RatingDB).filter(RatingDB.user_id == id).all()
-    # Obtener IDs de juegos calificados por el usuario
-    rated_game_ids = {r.game_id for r in user_ratings}
-    # Obtener juegos no calificados por el usuario
-    unrated_games = db.query(GameDB).filter(~GameDB.game_id.in_(rated_game_ids)).all()
-    # Si hay modelo entrenado, predecir ratings para juegos no calificados y devolver los mejores 10
+    # Obtener juegos comprados por el usuario desde buy_history
+    buy_history_ids = set()
+    if db_user.buy_history:
+        buy_history_ids = set(map(int, db_user.buy_history.split(',')))
+    # Obtener juegos no comprados por el usuario
+    unbought_games = db.query(GameDB).filter(~GameDB.game_id.in_(buy_history_ids)).all()
+    # Si hay modelo entrenado, predecir ratings para juegos no comprados y devolver los mejores 10
     if svd_model is not None:
         predictions = []
-        # Predecir rating para cada juego no calificado
-        for game in unrated_games:
-            # Predecir rating usando el modelo SVD de Surprise
+        for game in unbought_games:
             pred = svd_model.predict(id, game.game_id)
-            # Guardar la predicción junto con el juego para ordenar posteriormente
             predictions.append((game, pred.est))
-            # Ordenar por rating predicho y tomar los mejores 10
         recommendations = sorted(predictions, key=lambda x: x[1], reverse=True)[:10]
         return {
             "recommendations": [
@@ -103,7 +99,7 @@ def recommend(id: int, db: Session = Depends(get_db)):
             ]
         }
     # Fallback: lógica mock si no hay modelo
-    games = db.query(GameDB).order_by(GameDB.rating_avg.desc().nullslast()).limit(10).all()
+    games = db.query(GameDB).filter(~GameDB.game_id.in_(buy_history_ids)).order_by(GameDB.rating_avg.desc().nullslast()).limit(10).all()
     return {"recommendations": [{"game_id": g.game_id, "name": g.name} for g in games]}
 
 
