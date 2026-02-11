@@ -73,34 +73,77 @@ def update_user(id: int, user: User, db: Session = Depends(get_db)):
 
 # Endpoint para obtener recomendaciones
 @app.get("/users/{id}/recommend")
-# Al obtener recomendaciones, se utiliza el modelo entrenado para predecir ratings de juegos no calificados por el usuario y se devuelven los mejores 10
 def recommend(id: int, db: Session = Depends(get_db)):
     # Validar que el usuario exista
     db_user = db.query(UserDB).filter(UserDB.user_id == id).first()
     if not db_user:
         raise HTTPException(status_code=404, detail="User not found")
-    # Obtener juegos comprados por el usuario desde buy_history
+    
+    # Verificar si el usuario tiene historial de compras
     buy_history_ids = set()
-    if db_user.buy_history:
+    has_buy_history = False
+    
+    if db_user.buy_history and db_user.buy_history.strip():
         buy_history_ids = set(map(int, db_user.buy_history.split(',')))
+        has_buy_history = True
+    
+    # Si el usuario NO tiene historial, recomendar por mejor rating promedio
+    if not has_buy_history:
+        games = db.query(GameDB).order_by(
+            GameDB.rating_avg.desc().nullslast()
+        ).limit(10).all()
+        return {
+            "recommendations": [
+                {
+                    "game_id": g.game_id, 
+                    "name": g.name, 
+                    "rating_avg": g.rating_avg
+                } 
+                for g in games
+            ]
+        }
+    
     # Obtener juegos no comprados por el usuario
-    unbought_games = db.query(GameDB).filter(~GameDB.game_id.in_(buy_history_ids)).all()
-    # Si hay modelo entrenado, predecir ratings para juegos no comprados y devolver los mejores 10
+    unbought_games = db.query(GameDB).filter(
+        ~GameDB.game_id.in_(buy_history_ids)
+    ).all()
+    
+    # Si hay modelo entrenado, predecir ratings para juegos no comprados
     if svd_model is not None:
         predictions = []
         for game in unbought_games:
             pred = svd_model.predict(id, game.game_id)
             predictions.append((game, pred.est))
+        
         recommendations = sorted(predictions, key=lambda x: x[1], reverse=True)[:10]
         return {
             "recommendations": [
-                {"game_id": g.game_id, "name": g.name, "pred_rating": est}
+                {
+                    "game_id": g.game_id, 
+                    "name": g.name, 
+                    "pred_rating": est
+                }
                 for g, est in recommendations
             ]
         }
-    # Fallback: lógica mock si no hay modelo
-    games = db.query(GameDB).filter(~GameDB.game_id.in_(buy_history_ids)).order_by(GameDB.rating_avg.desc().nullslast()).limit(10).all()
-    return {"recommendations": [{"game_id": g.game_id, "name": g.name} for g in games]}
+    
+    # Fallback: si no hay modelo, usar rating promedio (excluyendo comprados)
+    games = db.query(GameDB).filter(
+        ~GameDB.game_id.in_(buy_history_ids)
+    ).order_by(
+        GameDB.rating_avg.desc().nullslast()
+    ).limit(10).all()
+    
+    return {
+        "recommendations": [
+            {
+                "game_id": g.game_id, 
+                "name": g.name,
+                "rating_avg": g.rating_avg
+            } 
+            for g in games
+        ]
+    }
 
 
 # Endpoint para agregar rating   
