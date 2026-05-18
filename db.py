@@ -1,4 +1,3 @@
-
 from sqlalchemy import Column, Integer, String, Float, ForeignKey, create_engine
 from sqlalchemy.orm import relationship, sessionmaker, declarative_base
 import pandas as pd
@@ -14,7 +13,8 @@ class UserDB(Base):
     __tablename__ = 'users'
     user_id = Column(Integer, primary_key=True, index=True)
     username = Column(String, unique=True, index=True)
-    buy_history = Column(String, nullable=True)  # Puede ser JSON o texto
+    buy_history = Column(String, nullable=True)
+    gustos = Column(String, nullable=True)   # ← agregar esta línea
     rating_history = relationship('RatingDB', back_populates='user')
 
 class GameDB(Base):
@@ -24,6 +24,7 @@ class GameDB(Base):
     rating_avg = Column(Float, nullable=True)
     no_of_ratings = Column(Integer, nullable=True)
     price = Column(Float, nullable=True)
+    categoria = Column(String, nullable=True)
     ratings = relationship('RatingDB', back_populates='game')
 
 class RatingDB(Base):
