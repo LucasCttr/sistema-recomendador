@@ -215,60 +215,74 @@ def recommend(id: int, db: Session = Depends(get_db)):
 
     excluded_game_ids = buy_history_ids | rated_game_ids
 
-    # COLD START
-    if num_ratings < COLD_START_THRESHOLD:
-        query = db.query(GameDB)
-        if excluded_game_ids:
-            query = query.filter(~GameDB.game_id.in_(excluded_game_ids))
+    # Pesos dinámicos según cantidad de ratings
+    # 0 ratings → 100% cold start | muchos ratings → casi 100% SVD
+    peso_svd  = num_ratings / (num_ratings + COLD_START_THRESHOLD)
+    peso_cold = 1 - peso_svd
 
-        if db_user.gustos:
-            query = query.filter(GameDB.categoria == db_user.gustos)
-            method = "cold_start_by_gustos"
-        else:
-            method = "cold_start_popular"
-
-        games = query.order_by(GameDB.rating_avg.desc().nullslast()).limit(10).all()
-        return {
-            "recommendations": [
-                {
-                    "game_id": g.game_id,
-                    "name": g.name,
-                    "categoria": g.categoria,
-                    "rating_avg": g.rating_avg,
-                    "method": method,
-                    "user_ratings_count": num_ratings,
-                }
-                for g in games
-            ]
-        }
-
-    # FILTRADO COLABORATIVO
-    unbought_games = (
+    # Juegos candidatos (excluir ya rateados y comprados)
+    candidate_games = (
         db.query(GameDB).filter(~GameDB.game_id.in_(excluded_game_ids)).all()
         if excluded_game_ids else db.query(GameDB).all()
     )
 
+    # Filtrar por gustos para el componente cold start si tiene preferencia
+    if db_user.gustos:
+        gustos_ids = {
+            g.game_id for g in db.query(GameDB)
+            .filter(GameDB.categoria == db_user.gustos).all()
+        }
+    else:
+        gustos_ids = None
+
     if svd_model is not None:
-        predictions = [(g, svd_model.predict(id, g.game_id).est) for g in unbought_games]
-        recommendations = sorted(predictions, key=lambda x: x[1], reverse=True)[:10]
+        blended = []
+        for g in candidate_games:
+            pred_svd  = svd_model.predict(id, g.game_id).est
+            rating_base = g.rating_avg or 0
+
+            # Si hay gustos, el componente cold start prioriza la categoría preferida
+            if gustos_ids is not None:
+                cold_score = (rating_base * 1.5) if g.game_id in gustos_ids else rating_base
+            else:
+                cold_score = rating_base
+
+            score = (peso_svd * pred_svd) + (peso_cold * cold_score)
+            blended.append((g, score, pred_svd))
+
+        blended.sort(key=lambda x: x[1], reverse=True)
+        top = blended[:10]
+
+        if peso_svd >= 0.5:
+            method = "collaborative_filtering"
+        elif peso_svd > 0:
+            method = "blended"
+        else:
+            method = "cold_start_by_gustos" if gustos_ids else "cold_start_popular"
+
         return {
             "recommendations": [
                 {
                     "game_id": g.game_id,
                     "name": g.name,
                     "categoria": g.categoria,
-                    "pred_rating": est,
-                    "method": "collaborative_filtering",
+                    "score": round(score, 4),
+                    "pred_rating_svd": round(pred_svd, 4),
+                    "method": method,
                     "user_ratings_count": num_ratings,
+                    "peso_svd": round(peso_svd, 2),
+                    "peso_cold": round(peso_cold, 2),
                 }
-                for g, est in recommendations
+                for g, score, pred_svd in top
             ]
         }
 
-    # FALLBACK
+    # FALLBACK sin modelo: cold start puro
     query = db.query(GameDB)
     if excluded_game_ids:
         query = query.filter(~GameDB.game_id.in_(excluded_game_ids))
+    if db_user.gustos:
+        query = query.filter(GameDB.categoria == db_user.gustos)
     games = query.order_by(GameDB.rating_avg.desc().nullslast()).limit(10).all()
     return {
         "recommendations": [
@@ -277,7 +291,7 @@ def recommend(id: int, db: Session = Depends(get_db)):
                 "name": g.name,
                 "categoria": g.categoria,
                 "rating_avg": g.rating_avg,
-                "method": "popularity_fallback",
+                "method": "cold_start_by_gustos" if db_user.gustos else "cold_start_popular",
                 "user_ratings_count": num_ratings,
             }
             for g in games
