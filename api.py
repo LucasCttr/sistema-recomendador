@@ -215,72 +215,70 @@ def recommend(id: int, db: Session = Depends(get_db)):
 
     excluded_game_ids = buy_history_ids | rated_game_ids
 
-    # COLD START
-    if num_ratings < COLD_START_THRESHOLD:
-        query = db.query(GameDB)
-        if excluded_game_ids:
-            query = query.filter(~GameDB.game_id.in_(excluded_game_ids))
-
-        if db_user.gustos:
-            query = query.filter(GameDB.categoria == db_user.gustos)
-            method = "cold_start_by_gustos"
-        else:
-            method = "cold_start_popular"
-
-        games = query.order_by(GameDB.rating_avg.desc().nullslast()).limit(10).all()
-        return {
-            "recommendations": [
-                {
-                    "game_id": g.game_id,
-                    "name": g.name,
-                    "categoria": g.categoria,
-                    "rating_avg": g.rating_avg,
-                    "method": method,
-                    "user_ratings_count": num_ratings,
-                }
-                for g in games
-            ]
-        }
-
-    # FILTRADO COLABORATIVO
-    unbought_games = (
+    # Juegos candidatos (excluir ya rateados y comprados)
+    candidate_games = (
         db.query(GameDB).filter(~GameDB.game_id.in_(excluded_game_ids)).all()
         if excluded_game_ids else db.query(GameDB).all()
     )
 
-    if svd_model is not None:
-        predictions = [(g, svd_model.predict(id, g.game_id).est) for g in unbought_games]
-        recommendations = sorted(predictions, key=lambda x: x[1], reverse=True)[:10]
+    # ── CASO 1: FILTRO COLABORATIVO PURO (SVD) ─────────────────────────────────
+    # Se activa si supera el threshold y el modelo está cargado
+    if num_ratings >= COLD_START_THRESHOLD and svd_model is not None:
+        svd_list = []
+        for g in candidate_games:
+            pred_svd = svd_model.predict(id, g.game_id).est
+            svd_list.append((g, pred_svd))
+
+        # Ordenar de mayor a menor según la predicción del modelo
+        svd_list.sort(key=lambda x: x[1], reverse=True)
+        top_svd = svd_list[:10]
+
         return {
             "recommendations": [
                 {
                     "game_id": g.game_id,
                     "name": g.name,
                     "categoria": g.categoria,
-                    "pred_rating": est,
+                    "score": round(pred_svd, 4),
                     "method": "collaborative_filtering",
                     "user_ratings_count": num_ratings,
                 }
-                for g, est in recommendations
+                for g, pred_svd in top_svd
             ]
         }
 
-    # FALLBACK
-    query = db.query(GameDB)
-    if excluded_game_ids:
-        query = query.filter(~GameDB.game_id.in_(excluded_game_ids))
-    games = query.order_by(GameDB.rating_avg.desc().nullslast()).limit(10).all()
+    # ── CASO 2: BASADO EN CONTENIDO / COLD START ──────────────────────────────
+    # Se activa si no alcanza el threshold (o si el modelo no está disponible)
+    
+    # Filtrar por gustos (Categoría preferida del usuario) si existe
+    if db_user.gustos:
+        content_games = [g for g in candidate_games if g.categoria == db_user.gustos]
+        method = "content_based_by_gustos"
+        
+        # Si no hay juegos en su categoría favorita que no haya comprado/visto,
+        # hacemos un fallback a los más populares en general.
+        if not content_games:
+            content_games = candidate_games
+            method = "cold_start_popular"
+    else:
+        content_games = candidate_games
+        method = "cold_start_popular"
+
+    # Ordenar los juegos seleccionados por su rating promedio en la plataforma
+    content_games.sort(key=lambda g: g.rating_avg or 0, reverse=True)
+    top_content = content_games[:10]
+
     return {
         "recommendations": [
             {
                 "game_id": g.game_id,
                 "name": g.name,
                 "categoria": g.categoria,
-                "rating_avg": g.rating_avg,
-                "method": "popularity_fallback",
+                "score": round(g.rating_avg or 0, 4),
+                "method": method,
                 "user_ratings_count": num_ratings,
             }
-            for g in games
+            for g in top_content
         ]
     }
 
