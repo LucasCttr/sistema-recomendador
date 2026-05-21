@@ -30,6 +30,7 @@ class User(BaseModel):
     user_id: int
     username: str
     buy_history: Optional[str] = None
+    gustos: Optional[str] = None
 
 class Rating(BaseModel):
     game_id: int
@@ -48,6 +49,7 @@ def serialize_user(user: UserDB, ratings_by_user: dict[int, list[dict]]) -> dict
     return {
         "user_id": user.user_id,
         "username": user.username,
+        "gustos": user.gustos,
         "buy_history": user.buy_history,
         "ratings": ratings_by_user.get(user.user_id, []),
     }
@@ -146,11 +148,24 @@ def create_user(user: User, db: Session = Depends(get_db)):
     db_user = db.query(UserDB).filter(UserDB.user_id == user.user_id).first()
     if db_user:
         raise HTTPException(status_code=400, detail="User already exists")
-    db_user = UserDB(user_id=user.user_id, username=user.username, buy_history=user.buy_history)
+    db_user = UserDB(
+        user_id=user.user_id,
+        username=user.username,
+        buy_history=user.buy_history,
+        gustos=user.gustos,
+    )
     db.add(db_user)
     db.commit()
     db.refresh(db_user)
-    return {"msg": "User created"}
+    return {
+        "msg": "User created",
+        "user": {
+            "user_id": db_user.user_id,
+            "username": db_user.username,
+            "gustos": db_user.gustos,
+            "buy_history": db_user.buy_history,
+        }
+    }
 
 
 # Endpoint para actualizar usuario
@@ -161,12 +176,13 @@ def update_user(id: int, user: User, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="User not found")
     db_user.username = user.username
     db_user.buy_history = user.buy_history
+    db_user.gustos = user.gustos
     db.commit()
     return {"msg": "User updated"}
 
 
 # Constante para el threshold de cold start
-COLD_START_THRESHOLD = 7  
+COLD_START_THRESHOLD = 17  
 
 @app.get("/users/{id}/recommend")
 def recommend(id: int, db: Session = Depends(get_db)):
@@ -251,7 +267,7 @@ def recommend(id: int, db: Session = Depends(get_db)):
         query = query.filter(GameDB.categoria == db_user.gustos.strip())
         
     if excluded_game_ids:
-        query = query.filter(~~GameDB.game_id.in_(excluded_game_ids))
+        query = query.filter(~GameDB.game_id.in_(excluded_game_ids))
     
     games = query.order_by(
         GameDB.rating_avg.desc().nullslast()
