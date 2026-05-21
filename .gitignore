@@ -23,3 +23,5 @@ outputs/
 # Ignorar archivos de logs
 *.log
 .venv_ml1m/
+
+#docs
